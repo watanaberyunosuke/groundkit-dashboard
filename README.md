@@ -178,6 +178,13 @@ WAREHOUSE=data/aviation.duckdb uvicorn api.index:app --port 8000   # pip install
 cd web && yarn install --frozen-lockfile && yarn dev               # proxies /api to :8000
 ```
 
+### Home-screen app (iPhone)
+
+There is no paid Apple Developer account yet, so on iPhone and iPad GroundKit ships as this site installed to the Home Screen: Safari, Share, Add to Home Screen. It then opens full screen with the GroundKit icon. iOS never offers to install a web app, so the page shows an install hint in iOS browsers until it runs from the Home Screen or the viewer taps **Not now**. Android browsers offer to install it from the same manifest.
+
+- `web/public/manifest.webmanifest` and `web/public/icons/` (PNG icons rendered from `icon.svg`; the Apple and maskable icons are full-bleed, since iOS and Android round the corners themselves).
+- `web/src/service-worker.js`, emitted by `vite.config.ts` as `/sw.js` with the build's hashed files, and registered in production builds only. The page and the last copy of each `/api/tables/` export are used when the network is down or slower than 4 s (page) or 8 s (tables). `/api/live`, `/api/tracks`, `/api/snapshot` and `/api/schedule` are never served from a cache. Each deploy installs a new worker; files from old builds are pruned.
+
 ### Accounts (optional)
 
 GroundKit accounts sync settings between the iOS app, the Android app and the dashboard. Sign-in uses email and password or Google through Supabase Auth, and the schema is in `supabase/migrations`. The dashboard shows **Customise** (home airport, third clock, section order and visibility) and **Sign in** above the Dive. Signed out, customisation stays in the browser. The Dive reads the layout and clock as Dive state (`layout`, `home_tz`), so inside MotherDuck it shows the defaults. Sign-in switches on when the build has `NEXT_PUBLIC_GROUNDKIT_SUPABASE_URL` and `NEXT_PUBLIC_GROUNDKIT_SUPABASE_PUBLISHABLE_KEY`, which the Vercel Supabase integration sets. Setup, the settings contract and known gaps are in [docs/accounts.md](docs/accounts.md).
@@ -208,6 +215,7 @@ Deploy and the ingest workflow share a concurrency group, so they never write to
 - **AeroDataBox untested against the live API.** The client follows the published OpenAPI spec; no key was available when it was written. Check the first run's `raw.ingest_log` row and a payload. Times without an actual (runway or revised) value fall back to the schedule and are flagged `*_time_is_scheduled`, with no delay.
 - **OpenSky quotas.** Tracks are limited to the last 30 days and the endpoint is marked experimental. The client reads `X-Rate-Limit-Remaining`, stops below `min_credits_remaining`, and caps calls at `max_tracks_per_run` (`config/airports.yml`). A track costs several credits (4 to 30 seen), so flights are tracked newest first. Each run's `raw.ingest_log` row records the HTTP status counts per endpoint (`http={'tracks': {200: ..., 404: ...}}`), so a run that stores no tracks shows whether OpenSky returned 404s or ran out of credits.
 - **NOTAM schedules.** A NOTAM with a D) schedule is only active in its sub-windows. `has_schedule` flags these; the in-force checks currently treat the whole B) to C) window as active, which overstates them.
+- **iPhone home-screen app, not an App Store app.** Push notifications need the app on the Home Screen (iOS 16.4 or later) and are not built yet. Nothing runs in the background, and iOS may clear the offline copy of an app that has not been opened for a few weeks. Offline, the page shows the last tables it loaded, which can be hours old; DuckDB's ICU extension must also have been cached by an earlier visit.
 - **HK feed terms.** The CAD site describes its data as informational. Read its Important Notices before using the data beyond analysis.
 
 ## 7. Troubleshooting
@@ -228,6 +236,7 @@ Deploy and the ingest workflow share a concurrency group, so they never write to
 | Flight run failed | `select * from md_get_flight_logs(flight_id := '<id>', run_number := <n>)`. Each source prints `FAILED - <reason>`; the run fails if any source or dbt failed. |
 | Deploy: `Flight secret 'opensky' does not exist` | Add `OPENSKY_CLIENT_ID` and `OPENSKY_CLIENT_SECRET` as GitHub secrets (or export them locally) and re-run. |
 | Dive shows `Catalog does not exist` | The viewer cannot see `md:aviation`. Share the database with them. |
+| Home-screen app shows an old version | The new worker takes over on the next launch. Close the app fully and reopen it, or remove it from the Home Screen and add it again. |
 | dbt cannot find the database | dbt runs from `dbt/`. Use `make transform`, or export an absolute `WAREHOUSE` path. |
 
 ## 8. Next steps
