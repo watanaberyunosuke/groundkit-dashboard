@@ -12,6 +12,10 @@ asked together: OpenSky's aircraft first, then adsb.lol's that OpenSky lacks; ei
 answers alone if the other fails (OpenSky has timed out from Vercel's servers). Each
 airport's answer is cached at the edge for 2 minutes, so all viewers share one call.
 
+/api/weather/<icao> proxies the latest METAR and TAF from the Aviation Weather Center, and
+Open-Meteo's current conditions at the airport, so both weather sections are fetched afresh
+on every page load (edge-cached for 1 minute).
+
 /api/snapshot/<icao> answers clients without DuckDB (the GroundKit apps) with one airport's
 conditions, NOTAMs, recent weather and callsign history as JSON, from the same SQL.
 
@@ -708,3 +712,159 @@ def schedule(icao: str) -> JSONResponse:
     tag_freighters(rows, ops)
     body.update(available=True, source=name, flights=rows, failed=failures)
     return JSONResponse(body, headers=SCHEDULE_HEADERS)
+
+
+# --- Live weather --------------------------------------------------------------------
+
+# Two kinds of weather, fetched afresh on each page load:
+#   Aviation  the latest METAR and TAF from the Aviation Weather Center, so they are as fresh
+#             as the reports, not as the pipeline's last hourly run. Fields are read as
+#             stg_metar reads them and named as fct_airport_conditions names them, so the
+#             page lays them over the mart's row.
+#   Local     Open-Meteo's current conditions at the airport's coordinates: model values in
+#             15-minute steps, between METARs and for what a METAR leaves out (feels-like,
+#             humidity, rain amount). Free tier is non-commercial.
+# AWC sends no CORS header, hence the proxy; Open-Meteo rides along so the page makes one
+# call. AWC caches its answers for 60 seconds, and so does the edge: one call a minute per
+# airport at most, well under AWC's 100 a minute.
+AWC_URL = "https://aviationweather.gov/api/data"
+OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+OPEN_METEO_CURRENT = ("temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,"
+                      "precipitation,weather_code,cloud_cover,pressure_msl,wind_speed_10m,"
+                      "wind_direction_10m,wind_gusts_10m,is_day")
+WEATHER_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Vercel-CDN-Cache-Control": "max-age=60",
+    "Access-Control-Allow-Origin": "*",
+}
+# Open-Meteo's WMO weather_code in words, as src/aviation/sources/wx_extra.py WMO_TEXT.
+WMO_TEXT = {
+    0: "Clear", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast", 45: "Fog",
+    48: "Rime fog", 51: "Light drizzle", 53: "Drizzle", 55: "Heavy drizzle",
+    56: "Freezing drizzle", 57: "Freezing drizzle", 61: "Light rain", 63: "Rain",
+    65: "Heavy rain", 66: "Freezing rain", 67: "Freezing rain", 71: "Light snow", 73: "Snow",
+    75: "Heavy snow", 77: "Snow grains", 80: "Light showers", 81: "Showers",
+    82: "Heavy showers", 85: "Snow showers", 86: "Heavy snow showers", 95: "Thunderstorm",
+    96: "Thunderstorm, hail", 99: "Thunderstorm, hail",
+}
+
+
+def _num(v) -> float | None:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _whole(v) -> int | None:
+    n = _num(v)
+    return None if n is None else round(n)
+
+
+def _epoch(v) -> str | None:
+    n = _num(v)
+    return None if n is None else _iso(datetime.fromtimestamp(n, timezone.utc))
+
+
+def metar_fields(m: dict) -> dict:
+    """One AWC METAR as fct_airport_conditions' METAR columns (see stg_metar)."""
+    visib = "" if m.get("visib") is None else str(m["visib"])
+    # Ceiling = lowest broken, overcast or obscured layer.
+    bases = [c.get("base") for c in m.get("clouds") or []
+             if c.get("cover") in ("BKN", "OVC", "OVX") and _num(c.get("base")) is not None]
+    return {
+        "metar_observed_at": _epoch(m.get("obsTime")),
+        "metar_raw": m.get("rawOb"),
+        "flight_category": m.get("fltCat") or None,
+        "wind_variable": m.get("wdir") == "VRB",
+        "wind_dir_deg": _whole(m.get("wdir")),
+        "wind_speed_kt": _whole(m.get("wspd")),
+        "wind_gust_kt": _whole(m.get("wgst")),
+        "visibility_sm": _num(visib.replace("+", "")),
+        "visibility_is_lower_bound": visib.endswith("+"),
+        "ceiling_ft": min(round(_num(b)) for b in bases) if bases else None,
+        "wx_string": m.get("wxString") or None,
+        "temp_c": _num(m.get("temp")),
+        "dewpoint_c": _num(m.get("dewp")),
+        "altimeter_hpa": _num(m.get("altim")),
+    }
+
+
+def taf_fields(t: dict) -> dict:
+    issued = t.get("issueTime")
+    return {
+        "taf_issued_at": _iso(datetime.fromisoformat(issued.replace("Z", "+00:00"))) if issued else None,
+        "taf_valid_from": _epoch(t.get("validTimeFrom")),
+        "taf_valid_to": _epoch(t.get("validTimeTo")),
+        "taf_raw": t.get("rawTAF"),
+    }
+
+
+def latest_weather(icao: str, metars: list[dict], tafs: list[dict]) -> tuple[dict | None, dict | None]:
+    """The newest METAR and TAF for `icao` in AWC's answers, as fields (None if there is none)."""
+    ms = [m for m in metars if m.get("icaoId") == icao and _num(m.get("obsTime")) is not None]
+    ts = [t for t in tafs if t.get("icaoId") == icao and t.get("issueTime")]
+    metar = max(ms, key=lambda m: _num(m["obsTime"])) if ms else None
+    taf = max(ts, key=lambda t: t["issueTime"]) if ts else None
+    return (metar and metar_fields(metar)), (taf and taf_fields(taf))
+
+
+def local_fields(payload: dict) -> dict | None:
+    """Open-Meteo's current block (asked for in knots and Unix time); None without one."""
+    cur = payload.get("current") or {}
+    if _num(cur.get("time")) is None:
+        return None
+    code = _whole(cur.get("weather_code"))
+    return {
+        "observed_at": _epoch(cur["time"]),
+        "conditions": WMO_TEXT.get(code) if code is not None else None,
+        "weather_code": code,
+        "is_day": bool(cur.get("is_day")),
+        "temp_c": _num(cur.get("temperature_2m")),
+        "feels_like_c": _num(cur.get("apparent_temperature")),
+        "humidity_pct": _whole(cur.get("relative_humidity_2m")),
+        "dewpoint_c": _num(cur.get("dew_point_2m")),
+        "precipitation_mm": _num(cur.get("precipitation")),
+        "cloud_cover_pct": _whole(cur.get("cloud_cover")),
+        "pressure_hpa": _num(cur.get("pressure_msl")),
+        "wind_dir_deg": _whole(cur.get("wind_direction_10m")),
+        "wind_speed_kt": _whole(cur.get("wind_speed_10m")),
+        "wind_gust_kt": _whole(cur.get("wind_gusts_10m")),
+    }
+
+
+@app.get("/api/weather/{icao}")
+def weather(icao: str) -> JSONResponse:
+    icao = icao.upper()
+    cur = get_connection().cursor()
+    try:
+        row = cur.execute("select lat, lon from reference.airports where icao = ?", [icao]).fetchone()
+    finally:
+        cur.close()
+    if row is None:
+        return _live_error(404, f"unknown airport {icao!r}")
+    lat, lon = row
+
+    # METARs of the last 3 hours, as the pipeline asks, so a late report still shows.
+    meteo = urllib.parse.urlencode({"latitude": lat, "longitude": lon, "current": OPEN_METEO_CURRENT,
+                                    "wind_speed_unit": "kn", "timeformat": "unixtime"})
+    queries = {"METAR": f"{AWC_URL}/metar?ids={icao}&format=json&hours=3",
+               "TAF": f"{AWC_URL}/taf?ids={icao}&format=json",
+               "Open-Meteo": f"{OPEN_METEO_URL}?{meteo}"}
+    answers, failures = {}, []
+    with ThreadPoolExecutor(len(queries)) as pool:
+        futures = {name: pool.submit(_get_json, url, {}, 8) for name, url in queries.items()}
+        for name, future in futures.items():
+            try:
+                answers[name] = future.result()
+            except Exception as exc:  # each part is worth sending without the others
+                failures.append(f"{name}: {_why(exc)}")
+                print(f"weather {icao}: {failures[-1]}")
+    if not answers:
+        return _live_error(502, "; ".join(failures))
+    metar, taf = latest_weather(icao, answers.get("METAR") or [], answers.get("TAF") or [])
+    local = local_fields(answers["Open-Meteo"]) if answers.get("Open-Meteo") else None
+    return JSONResponse({"time": int(time.time()),
+                         "sources": {"aviation": "aviationweather.gov", "local": "Open-Meteo"},
+                         "metar": metar, "taf": taf, "local": local, "failed": failures},
+                        headers=WEATHER_HEADERS)
