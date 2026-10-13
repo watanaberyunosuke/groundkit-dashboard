@@ -7,8 +7,8 @@
 //                        Kept across deploys and pruned to the current build, so the
 //                        DuckDB WASM file is only downloaded again when it changes.
 //   /api/tables/*        network first; after 8 s, or offline, the last copy cached.
-//   Other /api/*         network only: live positions, tracks and schedules must not be
-//                        shown from a cache.
+//   Other /api/*         network only: live positions, weather, tracks and schedules
+//                        must not be shown from a cache.
 //   Fonts, DuckDB's ICU extension, icons and the manifest
 //                        stale-while-revalidate.
 /* global BUILD, ASSETS */

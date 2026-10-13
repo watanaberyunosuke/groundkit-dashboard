@@ -5,7 +5,8 @@
 // Flight times are shown in the airport's local time (reference.airports.timezone).
 // Published by scripts/deploy_motherduck.py; preview locally with `motherduck dive watch`.
 // The same file is the Vercel site: web/ bundles it and runs its SQL on DuckDB-WASM.
-// Live aircraft come from the Vercel API (/api/live), which proxies OpenSky.
+// Live aircraft come from the Vercel API (/api/live), which proxies OpenSky; the current
+// METAR and TAF from /api/weather, which proxies the Aviation Weather Center.
 import { Children, isValidElement, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useSQLQuery, useDiveState } from "@motherduck/react-sql-query";
 import {
@@ -217,7 +218,8 @@ export const HOME_TZ = "Australia/Melbourne";
 // leaves out keep their default place after the listed ones. Empty is the default layout.
 // On the Vercel site a signed-in user's saved layout fills it (web/src/account).
 export const SECTIONS = [
-  { id: "conditions", title: "Current conditions" },
+  { id: "conditions", title: "Aviation weather" },
+  { id: "live_weather", title: "Live weather" },
   { id: "notams", title: "NOTAMs in force" },
   { id: "airspace", title: "Airspace" },
   { id: "en_route", title: "En route" },
@@ -444,6 +446,74 @@ function useSchedule(icao: string) {
     return () => { stale = true; clearInterval(id); };
   }, [icao]);
   return state;
+}
+
+// Weather fetched once each time the page loads (/api/weather), not on the pipeline's
+// hourly run: the latest METAR and TAF from the Aviation Weather Center, named as
+// fct_airport_conditions' columns, and Open-Meteo's current conditions at the airport
+// (`local`). Times are ISO strings. `failed` names the parts that did not load.
+type LiveWeather = {
+  loaded: boolean; metar: Record<string, any> | null; taf: Record<string, any> | null;
+  local: Record<string, any> | null; failed: string[]; error: string | null;
+};
+const NO_LIVE_WEATHER: LiveWeather = { loaded: false, metar: null, taf: null, local: null, failed: [], error: null };
+
+function useLiveWeather(icao: string) {
+  const [state, setState] = useState<LiveWeather>(NO_LIVE_WEATHER);
+  useEffect(() => {
+    if (!icao) return;
+    let stale = false;
+    setState(NO_LIVE_WEATHER);
+    fetch(`${API_BASE}/api/weather/${icao}`)
+      .then(async (r) => {
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(body?.detail ?? `HTTP ${r.status}`);
+        return body;
+      })
+      .then((b) => !stale && setState({ loaded: true, metar: b.metar ?? null, taf: b.taf ?? null,
+        local: b.local ?? null, failed: b.failed ?? [], error: null }))
+      .catch((e) => !stale && setState({ ...NO_LIVE_WEATHER, loaded: true, error: String(e?.message ?? e) }));
+    return () => { stale = true; };
+  }, [icao]);
+  return state;
+}
+
+// "14:45", the airport's local time.
+function clockText(iso: string, timeZone: string): string {
+  return new Date(iso).toLocaleTimeString("en-GB", { timeZone, hour: "2-digit", minute: "2-digit" });
+}
+
+// "13 04:30Z", as the conditions query formats METAR and TAF times.
+function zuluText(iso: string): string {
+  const d = new Date(iso);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}Z`;
+}
+
+// The warehouse's conditions row with the live METAR and TAF laid over it, where they are
+// at least as new. The rest (sunrise, ATIS, NOTAMs) stays the warehouse's. Temperature, dew
+// point and weather are then the METAR's own: the Live weather section has the readings
+// from outside it, so the mart's fill-ins from other sources are dropped.
+function withLiveWeather(row: Record<string, any> | undefined, live: LiveWeather): Record<string, any> | undefined {
+  if (!row) return row;
+  const out = { ...row, wx_live: false };
+  const m = live.metar;
+  const ageMin = m?.metar_observed_at ? Math.max(0, Math.round((Date.now() - Date.parse(m.metar_observed_at)) / 60_000)) : null;
+  if (m && m.metar_raw && ageMin != null && (row.metar_raw == null || ageMin <= N(row.metar_age_min))) {
+    Object.assign(out, m, {
+      metar_at: zuluText(m.metar_observed_at), metar_age_min: ageMin, wx_live: true,
+      temp_source: "metar", dewpoint_source: "metar", wx_text: null, wx_text_source: null,
+    });
+  }
+  const t = live.taf;
+  if (t?.taf_raw) {
+    Object.assign(out, t, {
+      taf_at: t.taf_issued_at ? zuluText(t.taf_issued_at) : null,
+      taf_from: t.taf_valid_from ? zuluText(t.taf_valid_from) : null,
+      taf_to: t.taf_valid_to ? zuluText(t.taf_valid_to) : null,
+    });
+  }
+  return out;
 }
 
 // ADS-B callsigns keep or drop leading zeros (CPA0710, CPA710); the schedule's drop them.
@@ -1594,7 +1664,9 @@ export default function AirportConditions() {
     }
     return [...lines.values()];
   }, [tracksQ.data]);
-  const wx = rowsOf(conditionsQ.data)[0];
+  const liveWx = useLiveWeather(icao);
+  const wx = useMemo(() => withLiveWeather(rowsOf(conditionsQ.data)[0], liveWx), [conditionsQ.data, liveWx]);
+  const local = liveWx.local;
   const kpi = rowsOf(kpiQ.data)[0];
   const depKpi = rowsOf(depKpiQ.data)[0];
   const taxi = rowsOf(taxiQ.data)[0];
@@ -1929,8 +2001,11 @@ export default function AirportConditions() {
       <Ordered layout={layout}>
       <Section
         id="conditions"
-        title="Current conditions"
-        note={wx?.metar_at ? `Latest METAR ${wx.metar_at}, ${N(wx.metar_age_min)} min ago. Refreshed hourly by the pipeline.` : undefined}
+        title="Aviation weather"
+        note={wx?.metar_at ? `METAR and TAF. Latest METAR ${wx.metar_at}, ${N(wx.metar_age_min)} min ago. ${
+          wx.wx_live ? "Fetched from aviationweather.gov when the page loaded."
+            : liveWx.loaded ? "aviationweather.gov did not answer, so this is the pipeline's hourly copy."
+            : "Refreshed hourly by the pipeline."}` : undefined}
       >
         {conditionsQ.isLoading ? <Skeleton h={180} /> : conditionsQ.isError ? (
           <Empty>Could not load conditions: {String(conditionsQ.error?.message ?? conditionsQ.error)}</Empty>
@@ -1947,7 +2022,6 @@ export default function AirportConditions() {
               <Tile label="Temp / dew point" value={tempDewText(wx)} />
               <Tile label="QNH" value={wx.altimeter_hpa == null ? "–" : `${Math.round(N(wx.altimeter_hpa))} hPa`} />
               <Tile label="Weather" value={weatherText(wx)} />
-              {wx.sunrise_local && wx.sunset_local && <Tile label="Sunrise / sunset" value={`${wx.sunrise_local} / ${wx.sunset_local}`} />}
               <Tile label="NOTAMs in force" value={wx.notams_in_force == null ? "No feed" : String(N(wx.notams_in_force))} />
             </div>
             <div style={{ fontSize: 12, color: MUTED, marginTop: 14 }}>METAR</div>
@@ -1965,6 +2039,31 @@ export default function AirportConditions() {
               </>
             )}
           </>
+        )}
+      </Section>
+
+      <Section
+        id="live_weather"
+        title="Live weather"
+        note={local?.observed_at
+          ? `Open-Meteo's current conditions at the airport's coordinates as at ${clockText(local.observed_at, tz)} local: model values in 15-minute steps, not an observation. Fetched when the page loaded.`
+          : undefined}
+      >
+        {!liveWx.loaded ? <Skeleton h={120} /> : !local ? (
+          <Empty>Live weather for {iata} is not available right now{liveWx.error ? ` (${liveWx.error})` : ""}.</Empty>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
+            <Tile label="Conditions" value={local.conditions ?? "–"} />
+            <Tile label="Temperature" value={local.temp_c == null ? "–"
+              : `${Math.round(N(local.temp_c))}°C${local.feels_like_c == null ? "" : `, feels ${Math.round(N(local.feels_like_c))}°`}`} />
+            <Tile label="Humidity / dew point" value={local.humidity_pct == null ? "–"
+              : `${N(local.humidity_pct)}%${local.dewpoint_c == null ? "" : ` / ${Math.round(N(local.dewpoint_c))}°C`}`} />
+            <Tile label="Wind" value={windText(local)} />
+            <Tile label="Precipitation, 15 min" value={local.precipitation_mm == null ? "–" : `${N(local.precipitation_mm).toFixed(1)} mm`} />
+            <Tile label="Cloud cover" value={local.cloud_cover_pct == null ? "–" : `${N(local.cloud_cover_pct)}%`} />
+            <Tile label="Pressure (MSL)" value={local.pressure_hpa == null ? "–" : `${Math.round(N(local.pressure_hpa))} hPa`} />
+            {wx?.sunrise_local && wx?.sunset_local && <Tile label="Sunrise / sunset" value={`${wx.sunrise_local} / ${wx.sunset_local}`} />}
+          </div>
         )}
       </Section>
 
