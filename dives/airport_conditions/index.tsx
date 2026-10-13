@@ -201,13 +201,17 @@ function Section({ id, title, note, children }: { id?: string; title: string; no
   );
 }
 
-// One of the two groups in Current conditions: a small heading and note over its tiles.
+// One of the two groups in Current conditions: a small heading and note over its tiles. Its
+// two rows are the parent grid's (subgrid), so side by side both groups' tiles start level
+// however long either note runs.
 function WeatherGroup({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
   return (
-    <div>
-      <h3 style={{ fontSize: 13, fontWeight: 600, color: INK, margin: 0 }}>{title}</h3>
-      {note && <p style={{ fontSize: 12, color: MUTED, margin: "2px 0 10px" }}>{note}</p>}
-      {children}
+    <div style={{ display: "grid", gridTemplateRows: "subgrid", gridRow: "span 2", rowGap: 0 }}>
+      <div>
+        <h3 style={{ fontSize: 13, fontWeight: 600, color: INK, margin: 0 }}>{title}</h3>
+        {note && <p style={{ fontSize: 12, color: MUTED, margin: "2px 0 10px" }}>{note}</p>}
+      </div>
+      <div>{children}</div>
     </div>
   );
 }
@@ -334,7 +338,7 @@ function Clocks({ zones }: { zones: { label: string; tz: string }[] }) {
 function Tile({ label, value, color }: { label: string; value: ReactNode; color?: string }) {
   return (
     <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: "8px 12px" }}>
-      <div style={{ fontSize: 12, color: MUTED }}>{label}</div>
+      <div style={{ fontSize: 12, color: MUTED, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{label}</div>
       <div style={{ fontSize: 17, fontWeight: 600, color: color ?? INK, marginTop: 2 }}>{value}</div>
     </div>
   );
@@ -364,8 +368,9 @@ const mono: CSSProperties = {
   border: `1px solid ${RULE}`, borderRadius: 6, padding: "8px 10px", whiteSpace: "pre-wrap", margin: "4px 0 0",
 };
 
-// Weather tiles, a few to a row in each half of Current conditions.
-const tileGrid: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10 };
+// Weather tiles, two to a row in each half of Current conditions, so values fit on one line
+// and the halves' rows line up.
+const tileGrid: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 };
 
 const windText = (r: Record<string, any>) =>
   r.wind_speed_kt == null ? "–"
@@ -725,11 +730,16 @@ function fromNote(source: unknown): string {
 }
 // Temperature and dew point, with the source named when either is not from the METAR.
 function tempDewText(wx: Record<string, any>): string {
-  if (wx.temp_c == null) return "–";
-  const dew = wx.dewpoint_c == null ? "–" : N(wx.dewpoint_c);
   const notes = Array.from(new Set([fromNote(wx.temp_source), fromNote(wx.dewpoint_source)].filter(Boolean)));
-  return `${N(wx.temp_c)}° / ${dew}°C${notes.join("")}`;
+  return `${tempPair(wx.temp_c, wx.dewpoint_c)}${wx.temp_c == null ? "" : notes.join("")}`;
 }
+// The weather tiles' shared formats, so both groups read alike: "31° / 23°C", "1016 hPa".
+function tempPair(temp: unknown, dew: unknown): string {
+  if (temp == null) return "–";
+  return dew == null ? `${Math.round(N(temp))}°C` : `${Math.round(N(temp))}° / ${Math.round(N(dew))}°C`;
+}
+const hpaText = (v: unknown) => (v == null ? "–" : `${Math.round(N(v))} hPa`);
+const pctText = (v: unknown) => (v == null ? "–" : `${Math.round(N(v))}%`);
 // METAR/TAF present-weather codes (ICAO Annex 3) in plain English.
 const WX_DESCRIPTOR: Record<string, string> = {
   MI: "shallow", PR: "partial", BC: "patches of", DR: "low drifting", BL: "blowing", FZ: "freezing",
@@ -811,7 +821,7 @@ function WeatherPanel({ wx, onClose }: { wx: Record<string, any>; onClose: () =>
         {row("Visibility", visText(wx))}
         {row("Ceiling", wx.ceiling_ft == null ? "None" : `${N(wx.ceiling_ft).toLocaleString()} ft`)}
         {row("Temp / dew", tempDewText(wx))}
-        {row("QNH", wx.altimeter_hpa == null ? "–" : `${Math.round(N(wx.altimeter_hpa))} hPa`)}
+        {row("QNH", hpaText(wx.altimeter_hpa))}
         {row("Weather", weatherText(wx))}
         {wx.sunrise_local && wx.sunset_local && row("Sun", `↑ ${wx.sunrise_local}  ↓ ${wx.sunset_local}`)}
       </div>
@@ -2020,13 +2030,15 @@ export default function AirportConditions() {
       </div>
 
       <Ordered layout={layout}>
-      <Section id="conditions" title="Current conditions">
+      <Section id="conditions" title="Current conditions"
+        note={wx?.sunrise_local && wx?.sunset_local ? `Sunrise ${wx.sunrise_local}, sunset ${wx.sunset_local} local.` : undefined}>
         {conditionsQ.isLoading ? <Skeleton h={180} /> : conditionsQ.isError ? (
           <Empty>Could not load conditions: {String(conditionsQ.error?.message ?? conditionsQ.error)}</Empty>
         ) : (
           <>
-            {/* The airport's reports and the model's live values side by side; stacked on a phone. */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 340px), 1fr))", gap: 20, marginTop: 10 }}>
+            {/* The airport's reports and the model's live values side by side; stacked on a phone.
+                Tiles in the same place in each group show the same kind of value. */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 340px), 1fr))", gap: 20 }}>
               <WeatherGroup
                 title="Aviation weather (METAR and TAF)"
                 note={wx?.metar_at ? `Latest METAR ${wx.metar_at}, ${N(wx.metar_age_min)} min ago. ${
@@ -2038,12 +2050,12 @@ export default function AirportConditions() {
                   <div style={tileGrid}>
                     <Tile label="Flight category" value={wx.flight_category ?? "–"}
                       color={wx.flight_category ? CATEGORY_COLORS[wx.flight_category] : MUTED} />
+                    <Tile label="Weather" value={weatherText(wx)} />
                     <Tile label="Wind" value={windText(wx)} />
                     <Tile label="Visibility" value={visText(wx)} />
-                    <Tile label="Ceiling" value={wx.ceiling_ft == null ? "None" : `${N(wx.ceiling_ft).toLocaleString()} ft`} />
                     <Tile label="Temp / dew point" value={tempDewText(wx)} />
-                    <Tile label="QNH" value={wx.altimeter_hpa == null ? "–" : `${Math.round(N(wx.altimeter_hpa))} hPa`} />
-                    <Tile label="Weather" value={weatherText(wx)} />
+                    <Tile label="Ceiling" value={wx.ceiling_ft == null ? "None" : `${N(wx.ceiling_ft).toLocaleString()} ft`} />
+                    <Tile label="Pressure (QNH)" value={hpaText(wx.altimeter_hpa)} />
                     <Tile label="NOTAMs in force" value={wx.notams_in_force == null ? "No feed" : String(N(wx.notams_in_force))} />
                   </div>
                 )}
@@ -2059,15 +2071,13 @@ export default function AirportConditions() {
                 ) : (
                   <div style={tileGrid}>
                     <Tile label="Conditions" value={local.conditions ?? "–"} />
-                    <Tile label="Temperature" value={local.temp_c == null ? "–"
-                      : `${Math.round(N(local.temp_c))}°C${local.feels_like_c == null ? "" : `, feels ${Math.round(N(local.feels_like_c))}°`}`} />
-                    <Tile label="Humidity / dew point" value={local.humidity_pct == null ? "–"
-                      : `${N(local.humidity_pct)}%${local.dewpoint_c == null ? "" : ` / ${Math.round(N(local.dewpoint_c))}°C`}`} />
+                    <Tile label="Cloud cover" value={pctText(local.cloud_cover_pct)} />
                     <Tile label="Wind" value={windText(local)} />
-                    <Tile label="Precipitation, 15 min" value={local.precipitation_mm == null ? "–" : `${N(local.precipitation_mm).toFixed(1)} mm`} />
-                    <Tile label="Cloud cover" value={local.cloud_cover_pct == null ? "–" : `${N(local.cloud_cover_pct)}%`} />
-                    <Tile label="Pressure (MSL)" value={local.pressure_hpa == null ? "–" : `${Math.round(N(local.pressure_hpa))} hPa`} />
-                    {wx?.sunrise_local && wx?.sunset_local && <Tile label="Sunrise / sunset" value={`${wx.sunrise_local} / ${wx.sunset_local}`} />}
+                    <Tile label="Rain, last 15 min" value={local.precipitation_mm == null ? "–" : `${N(local.precipitation_mm).toFixed(1)} mm`} />
+                    <Tile label="Temp / dew point" value={tempPair(local.temp_c, local.dewpoint_c)} />
+                    <Tile label="Humidity" value={pctText(local.humidity_pct)} />
+                    <Tile label="Pressure (MSL)" value={hpaText(local.pressure_hpa)} />
+                    <Tile label="Feels like" value={local.feels_like_c == null ? "–" : `${Math.round(N(local.feels_like_c))}°C`} />
                   </div>
                 )}
               </WeatherGroup>
