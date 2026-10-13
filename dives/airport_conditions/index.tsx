@@ -201,6 +201,17 @@ function Section({ id, title, note, children }: { id?: string; title: string; no
   );
 }
 
+// One of the two groups in Current conditions: a small heading and note over its tiles.
+function WeatherGroup({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
+  return (
+    <div>
+      <h3 style={{ fontSize: 13, fontWeight: 600, color: INK, margin: 0 }}>{title}</h3>
+      {note && <p style={{ fontSize: 12, color: MUTED, margin: "2px 0 10px" }}>{note}</p>}
+      {children}
+    </div>
+  );
+}
+
 function KPI({ label, value }: { label: string; value: string }) {
   return (
     <div>
@@ -218,8 +229,7 @@ export const HOME_TZ = "Australia/Melbourne";
 // leaves out keep their default place after the listed ones. Empty is the default layout.
 // On the Vercel site a signed-in user's saved layout fills it (web/src/account).
 export const SECTIONS = [
-  { id: "conditions", title: "Aviation weather" },
-  { id: "live_weather", title: "Live weather" },
+  { id: "conditions", title: "Current conditions" },
   { id: "notams", title: "NOTAMs in force" },
   { id: "airspace", title: "Airspace" },
   { id: "en_route", title: "En route" },
@@ -354,6 +364,9 @@ const mono: CSSProperties = {
   border: `1px solid ${RULE}`, borderRadius: 6, padding: "8px 10px", whiteSpace: "pre-wrap", margin: "4px 0 0",
 };
 
+// Weather tiles, a few to a row in each half of Current conditions.
+const tileGrid: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10 };
+
 const windText = (r: Record<string, any>) =>
   r.wind_speed_kt == null ? "–"
     : N(r.wind_speed_kt) === 0 ? "Calm"
@@ -476,6 +489,14 @@ function useLiveWeather(icao: string) {
     return () => { stale = true; };
   }, [icao]);
   return state;
+}
+
+// "2026-10-13 00:35Z". DuckDB-WASM hands timestamps over as epoch milliseconds, MotherDuck as
+// strings, so both are read.
+function utcMinuteText(v: unknown): string | null {
+  if (v == null || v === "") return null;
+  const iso = typeof v === "number" || v instanceof Date ? new Date(v).toISOString() : String(v);
+  return `${iso.slice(0, 16).replace("T", " ")}Z`;
 }
 
 // "14:45", the airport's local time.
@@ -1999,71 +2020,77 @@ export default function AirportConditions() {
       </div>
 
       <Ordered layout={layout}>
-      <Section
-        id="conditions"
-        title="Aviation weather"
-        note={wx?.metar_at ? `METAR and TAF. Latest METAR ${wx.metar_at}, ${N(wx.metar_age_min)} min ago. ${
-          wx.wx_live ? "Fetched from aviationweather.gov when the page loaded."
-            : liveWx.loaded ? "aviationweather.gov did not answer, so this is the pipeline's hourly copy."
-            : "Refreshed hourly by the pipeline."}` : undefined}
-      >
+      <Section id="conditions" title="Current conditions">
         {conditionsQ.isLoading ? <Skeleton h={180} /> : conditionsQ.isError ? (
           <Empty>Could not load conditions: {String(conditionsQ.error?.message ?? conditionsQ.error)}</Empty>
-        ) : !wx || wx.metar_raw == null ? (
-          <Empty>No METAR for {iata} yet.</Empty>
         ) : (
           <>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
-              <Tile label="Flight category" value={wx.flight_category ?? "–"}
-                color={wx.flight_category ? CATEGORY_COLORS[wx.flight_category] : MUTED} />
-              <Tile label="Wind" value={windText(wx)} />
-              <Tile label="Visibility" value={visText(wx)} />
-              <Tile label="Ceiling" value={wx.ceiling_ft == null ? "None" : `${N(wx.ceiling_ft).toLocaleString()} ft`} />
-              <Tile label="Temp / dew point" value={tempDewText(wx)} />
-              <Tile label="QNH" value={wx.altimeter_hpa == null ? "–" : `${Math.round(N(wx.altimeter_hpa))} hPa`} />
-              <Tile label="Weather" value={weatherText(wx)} />
-              <Tile label="NOTAMs in force" value={wx.notams_in_force == null ? "No feed" : String(N(wx.notams_in_force))} />
+            {/* The airport's reports and the model's live values side by side; stacked on a phone. */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 340px), 1fr))", gap: 20, marginTop: 10 }}>
+              <WeatherGroup
+                title="Aviation weather (METAR and TAF)"
+                note={wx?.metar_at ? `Latest METAR ${wx.metar_at}, ${N(wx.metar_age_min)} min ago. ${
+                  wx.wx_live ? "Fetched from aviationweather.gov when the page loaded."
+                    : liveWx.loaded ? "aviationweather.gov did not answer, so this is the pipeline's hourly copy."
+                    : "Refreshed hourly by the pipeline."}` : undefined}
+              >
+                {!wx || wx.metar_raw == null ? <Empty>No METAR for {iata} yet.</Empty> : (
+                  <div style={tileGrid}>
+                    <Tile label="Flight category" value={wx.flight_category ?? "–"}
+                      color={wx.flight_category ? CATEGORY_COLORS[wx.flight_category] : MUTED} />
+                    <Tile label="Wind" value={windText(wx)} />
+                    <Tile label="Visibility" value={visText(wx)} />
+                    <Tile label="Ceiling" value={wx.ceiling_ft == null ? "None" : `${N(wx.ceiling_ft).toLocaleString()} ft`} />
+                    <Tile label="Temp / dew point" value={tempDewText(wx)} />
+                    <Tile label="QNH" value={wx.altimeter_hpa == null ? "–" : `${Math.round(N(wx.altimeter_hpa))} hPa`} />
+                    <Tile label="Weather" value={weatherText(wx)} />
+                    <Tile label="NOTAMs in force" value={wx.notams_in_force == null ? "No feed" : String(N(wx.notams_in_force))} />
+                  </div>
+                )}
+              </WeatherGroup>
+              <WeatherGroup
+                title="Live weather"
+                note={local?.observed_at
+                  ? `Open-Meteo at the airport's coordinates, as at ${clockText(local.observed_at, tz)} local: model values in 15-minute steps, not an observation. Fetched when the page loaded.`
+                  : undefined}
+              >
+                {!liveWx.loaded ? <Skeleton h={120} /> : !local ? (
+                  <Empty>Live weather for {iata} is not available right now{liveWx.error ? ` (${liveWx.error})` : ""}.</Empty>
+                ) : (
+                  <div style={tileGrid}>
+                    <Tile label="Conditions" value={local.conditions ?? "–"} />
+                    <Tile label="Temperature" value={local.temp_c == null ? "–"
+                      : `${Math.round(N(local.temp_c))}°C${local.feels_like_c == null ? "" : `, feels ${Math.round(N(local.feels_like_c))}°`}`} />
+                    <Tile label="Humidity / dew point" value={local.humidity_pct == null ? "–"
+                      : `${N(local.humidity_pct)}%${local.dewpoint_c == null ? "" : ` / ${Math.round(N(local.dewpoint_c))}°C`}`} />
+                    <Tile label="Wind" value={windText(local)} />
+                    <Tile label="Precipitation, 15 min" value={local.precipitation_mm == null ? "–" : `${N(local.precipitation_mm).toFixed(1)} mm`} />
+                    <Tile label="Cloud cover" value={local.cloud_cover_pct == null ? "–" : `${N(local.cloud_cover_pct)}%`} />
+                    <Tile label="Pressure (MSL)" value={local.pressure_hpa == null ? "–" : `${Math.round(N(local.pressure_hpa))} hPa`} />
+                    {wx?.sunrise_local && wx?.sunset_local && <Tile label="Sunrise / sunset" value={`${wx.sunrise_local} / ${wx.sunset_local}`} />}
+                  </div>
+                )}
+              </WeatherGroup>
             </div>
-            <div style={{ fontSize: 12, color: MUTED, marginTop: 14 }}>METAR</div>
-            <pre style={mono}>{wx.metar_raw}</pre>
-            <div style={{ fontSize: 12, color: MUTED, marginTop: 10 }}>
-              {wx.taf_raw ? `TAF issued ${wx.taf_at}, valid ${wx.taf_from} to ${wx.taf_to}` : "TAF"}
-            </div>
-            <pre style={mono}>{wx.taf_raw ?? "No TAF for this airport yet."}</pre>
-            {wx.atis_text && (
+            {wx?.metar_raw != null && (
+              <>
+                <div style={{ fontSize: 12, color: MUTED, marginTop: 16 }}>METAR</div>
+                <pre style={mono}>{wx.metar_raw}</pre>
+                <div style={{ fontSize: 12, color: MUTED, marginTop: 10 }}>
+                  {wx.taf_raw ? `TAF issued ${wx.taf_at}, valid ${wx.taf_from} to ${wx.taf_to}` : "TAF"}
+                </div>
+                <pre style={mono}>{wx.taf_raw ?? "No TAF for this airport yet."}</pre>
+              </>
+            )}
+            {wx?.atis_text && (
               <>
                 <div style={{ fontSize: 12, color: MUTED, marginTop: 10 }}>
-                  {`ATIS${wx.atis_arrival_letter ? ` arrival ${wx.atis_arrival_letter}` : ""}${wx.atis_departure_letter ? `, departure ${wx.atis_departure_letter}` : ""}, Hong Kong CAD, last seen ${wx.atis_seen_at ? String(wx.atis_seen_at).slice(0, 16).replace("T", " ") + "Z" : "recently"}`}
+                  {`ATIS${wx.atis_arrival_letter ? ` arrival ${wx.atis_arrival_letter}` : ""}${wx.atis_departure_letter ? `, departure ${wx.atis_departure_letter}` : ""}, Hong Kong CAD, last seen ${utcMinuteText(wx.atis_seen_at) ?? "recently"}`}
                 </div>
                 <pre style={mono}>{wx.atis_text}</pre>
               </>
             )}
           </>
-        )}
-      </Section>
-
-      <Section
-        id="live_weather"
-        title="Live weather"
-        note={local?.observed_at
-          ? `Open-Meteo's current conditions at the airport's coordinates as at ${clockText(local.observed_at, tz)} local: model values in 15-minute steps, not an observation. Fetched when the page loaded.`
-          : undefined}
-      >
-        {!liveWx.loaded ? <Skeleton h={120} /> : !local ? (
-          <Empty>Live weather for {iata} is not available right now{liveWx.error ? ` (${liveWx.error})` : ""}.</Empty>
-        ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
-            <Tile label="Conditions" value={local.conditions ?? "–"} />
-            <Tile label="Temperature" value={local.temp_c == null ? "–"
-              : `${Math.round(N(local.temp_c))}°C${local.feels_like_c == null ? "" : `, feels ${Math.round(N(local.feels_like_c))}°`}`} />
-            <Tile label="Humidity / dew point" value={local.humidity_pct == null ? "–"
-              : `${N(local.humidity_pct)}%${local.dewpoint_c == null ? "" : ` / ${Math.round(N(local.dewpoint_c))}°C`}`} />
-            <Tile label="Wind" value={windText(local)} />
-            <Tile label="Precipitation, 15 min" value={local.precipitation_mm == null ? "–" : `${N(local.precipitation_mm).toFixed(1)} mm`} />
-            <Tile label="Cloud cover" value={local.cloud_cover_pct == null ? "–" : `${N(local.cloud_cover_pct)}%`} />
-            <Tile label="Pressure (MSL)" value={local.pressure_hpa == null ? "–" : `${Math.round(N(local.pressure_hpa))} hPa`} />
-            {wx?.sunrise_local && wx?.sunset_local && <Tile label="Sunrise / sunset" value={`${wx.sunrise_local} / ${wx.sunset_local}`} />}
-          </div>
         )}
       </Section>
 
