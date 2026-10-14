@@ -2,7 +2,7 @@
 
 How much does weather and runway availability cost arriving flights at Sydney, Melbourne, Brisbane, Singapore, Hong Kong, Amsterdam and Anchorage?
 
-This is the data platform behind **GroundKit**, the app for apron, ramp and cargo crews ([iOS](https://github.com/watanaberyunosuke/groundkit-ios), [Android](https://github.com/watanaberyunosuke/groundkit-android), [website](https://groundkit.harrydatahub.com)). The Airport conditions dashboard below is GroundKit's web view, live at [groundkit-dashboard.harrydatahub.com](https://groundkit-dashboard.harrydatahub.com).
+This is the data platform behind **GroundKit**, the app for apron, ramp and cargo crews ([iOS](https://github.com/watanaberyunosuke/groundkit-ios), [Android](https://github.com/watanaberyunosuke/groundkit-android), [website](https://getgroundkit.com)). The Airport conditions dashboard below is GroundKit's web view, live at [dashboard.getgroundkit.com](https://dashboard.getgroundkit.com).
 
 - Ingests METAR/TAF weather, NOTAMs (every airport except the Australian ones), scheduled and actual flight times, and ADS-B flight paths for the last 30 days on a schedule into DuckDB (local) or MotherDuck (scheduled runs).
 - Transforms with dbt into marts that line up each arrival with the weather and NOTAMs in force when it landed.
