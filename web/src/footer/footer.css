@@ -1,0 +1,9 @@
+/* Colours come from account.css, which defines the --gk-* tokens for both themes. */
+.gk-footer {
+  padding: 16px 24px 24px; text-align: center;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif; font-size: 13px;
+  background: var(--gk-bg); color: var(--gk-muted);
+}
+.gk-footer a { color: var(--gk-accent); text-decoration: none; }
+.gk-footer a:hover { text-decoration: underline; }
+.gk-footer a:focus-visible { outline: 2px solid var(--gk-accent); outline-offset: 2px; }

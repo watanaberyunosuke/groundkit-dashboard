@@ -1,5 +1,7 @@
 # Aviation data analysis
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/P5V328S6C2)
+
 How much does weather and runway availability cost arriving flights at Sydney, Melbourne, Brisbane, Singapore, Hong Kong, Amsterdam and Anchorage?
 
 This is the data platform behind **GroundKit**, the app for apron, ramp and cargo crews ([iOS](https://github.com/watanaberyunosuke/groundkit-ios), [Android](https://github.com/watanaberyunosuke/groundkit-android), [website](https://getgroundkit.com)). The Airport conditions dashboard below is GroundKit's web view, live at [dashboard.getgroundkit.com](https://dashboard.getgroundkit.com).

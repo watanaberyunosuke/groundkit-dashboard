@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import AirportConditions from "../../dives/airport_conditions/index.tsx";
 import AccountBar from "./account/AccountBar";
 import { startThemeSync } from "./account/theme";
+import Footer from "./footer/Footer";
 import InstallHint from "./install/InstallHint";
 import "./account/account.css";
 
@@ -24,5 +25,6 @@ createRoot(document.getElementById("root")!).render(
     <InstallHint />
     <AccountBar />
     <AirportConditions />
+    <Footer />
   </StrictMode>,
 );
