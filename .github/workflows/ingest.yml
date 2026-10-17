@@ -62,7 +62,7 @@ jobs:
       quota_spent: ${{ steps.run.outputs.quota_spent }}
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: astral-sh/setup-uv@v10.3.0
         with:
           python-version: "3.11"
           enable-cache: true
@@ -108,7 +108,7 @@ jobs:
       AERODATABOX_KEY: ${{ secrets.AERODATABOX_KEY }}
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: astral-sh/setup-uv@v10.3.0
         with:
           python-version: "3.11"
           enable-cache: true
