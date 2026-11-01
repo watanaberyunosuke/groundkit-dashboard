@@ -8,7 +8,8 @@ version = "0.1.0"
 description = "Weather, NOTAM and ADS-B flight-path analysis for airports in Australia, Asia, Europe and Alaska"
 requires-python = ">=3.10"
 dependencies = [
-  "duckdb>=1.1",
+  # Below 2.0 until MotherDuck supports DuckDB 2.x.
+  "duckdb>=1.1,<2",
   "requests>=2.31",
   "curl_cffi>=0.7",
   "pyyaml>=6.0",
