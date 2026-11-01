@@ -11,3 +11,9 @@ aviation:
       # DuckDB uses the machine's timezone and day boundaries shift.
       settings:
         TimeZone: UTC
+        # DuckDB runs an ASOF join as a nested loop when it estimates the left side at
+        # fewer rows than this (default 64). The flights CTEs in fct_arrivals and
+        # fct_departures (stg_flights joined to the airports seed) are estimated at
+        # ~7 rows but hold ~160k, so their ASOF joins to stg_metar took 49 minutes
+        # each on MotherDuck instead of under a second. 0 always uses the ASOF join.
+        asof_loop_join_threshold: 0
