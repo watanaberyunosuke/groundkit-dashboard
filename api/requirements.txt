@@ -1,5 +1,6 @@
 # Dependencies of the Vercel function only (api/index.py); the pipeline uses pyproject.toml.
-duckdb>=2.0.0
+# MotherDuck does not support DuckDB 2.x yet; md: connections fail on it.
+duckdb>=1.5.6,<2
 fastapi>=0.162.0
 # duckdb needs pytz to return TIMESTAMPTZ values to Python (/api/snapshot).
 pytz

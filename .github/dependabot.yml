@@ -12,6 +12,11 @@ updates:
   # The pipeline, dbt and CI environment (pyproject.toml + uv.lock).
   - package-ecosystem: uv
     directory: /
+    # MotherDuck does not support DuckDB 2.x yet, and md: connections fail on it.
+    # Remove once MotherDuck supports DuckDB 2.x.
+    ignore:
+      - dependency-name: duckdb
+        update-types: [version-update:semver-major]
     schedule:
       interval: weekly
     cooldown:
@@ -30,6 +35,11 @@ updates:
       - /api
       - /flights/aviation_pipeline
       - /flights/initial_load
+    # MotherDuck does not support DuckDB 2.x yet, and md: connections fail on it.
+    # Remove once MotherDuck supports DuckDB 2.x.
+    ignore:
+      - dependency-name: duckdb
+        update-types: [version-update:semver-major]
     schedule:
       interval: weekly
     cooldown:
