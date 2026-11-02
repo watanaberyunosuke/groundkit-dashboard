@@ -47,6 +47,7 @@ Tests: `make test-supabase` runs the migration against a throwaway Postgres with
 3. Authentication > Providers > Email: keep "Confirm email" on, and set the minimum password length to 8 to match the clients.
 4. **Google** ([docs](https://supabase.com/docs/guides/auth/social-login/auth-google)): a Web OAuth client with redirect URI `https://<project-ref>.supabase.co/auth/v1/callback`.
 5. **Apple and Microsoft: off.** Sign in with Apple needs a paid Apple Developer Program membership, so both are removed from the clients and should stay disabled under Authentication > Providers. To bring them back, revert the `chore/disable-apple-microsoft-sign-in` changes in the three client repos and configure [Apple](https://supabase.com/docs/guides/auth/social-login/auth-apple) (Services ID, then bundle ID `com.harrydatahub.GroundKit`; the web secret key expires every 6 months) and [Microsoft](https://supabase.com/docs/guides/auth/social-login/auth-azure) (Entra ID app, tenant "common", `email` scope).
+6. **Keep-alive (Free plan).** Supabase pauses Free projects with too little database activity over 7 days ([docs](https://supabase.com/docs/guides/platform/free-project-pausing)). `.github/workflows/supabase-keepalive.yml` reads `profiles` through the REST API every 3 days. Set the repository variables `GROUNDKIT_SUPABASE_URL` and `GROUNDKIT_SUPABASE_PUBLISHABLE_KEY` (the same public values as Vercel), then run the workflow once by hand to check it.
 
 ## 4. Client configuration
 
