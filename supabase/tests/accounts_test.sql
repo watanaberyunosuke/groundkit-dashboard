@@ -99,6 +99,7 @@ do $$ begin
   raise exception 'FAILED: anon could read settings';
 exception when insufficient_privilege then raise notice 'ok: anon cannot read settings';
 end $$;
+select pg_temp.check(public.keepalive(), 'anon can call keepalive');
 
 -- Delete own account cascades.
 reset role;

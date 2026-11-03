@@ -2,9 +2,9 @@ name: supabase-keepalive
 
 # Supabase pauses Free plan projects that receive too little database activity over 7 days
 # (https://supabase.com/docs/guides/platform/free-project-pausing). Its documented fix is to
-# make API calls to the project, so this workflow runs a real database read through PostgREST
-# every 3 days. Row-level security returns no rows to the publishable key; the query still
-# runs in Postgres, which is what counts.
+# make API calls to the project, so this workflow calls public.keepalive() through PostgREST
+# every 3 days. The function (supabase/migrations/20261103120000_keepalive.sql) runs a query in
+# Postgres and reads no user data; it is the only thing the publishable key may call.
 #
 # Required repository secrets (Settings > Secrets and variables > Actions > Secrets; the same
 # values as the Vercel NEXT_PUBLIC_GROUNDKIT_SUPABASE_* variables):
@@ -35,10 +35,10 @@ jobs:
             --retry 4 --retry-all-errors --retry-delay 15 --max-time 30 \
             -H "apikey: $SUPABASE_KEY" \
             -H "Authorization: Bearer $SUPABASE_KEY" \
-            "${SUPABASE_URL%/}/rest/v1/profiles?select=id&limit=1")
+            "${SUPABASE_URL%/}/rest/v1/rpc/keepalive")
           echo "HTTP $status"
           if [ "$status" != "200" ]; then
-            echo "::error::Database read failed (HTTP $status). The project may already be paused; resume it in the Supabase dashboard."
+            echo "::error::Database call failed (HTTP $status). HTTP 404 means the keepalive migration is not applied; a 5xx or timeout means the project may be paused (resume it in the Supabase dashboard)."
             cat response.json
             exit 1
           fi
