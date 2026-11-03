@@ -6,8 +6,8 @@ name: supabase-keepalive
 # every 3 days. Row-level security returns no rows to the publishable key; the query still
 # runs in Postgres, which is what counts.
 #
-# Required repository variables (Settings > Secrets and variables > Actions > Variables; both
-# are public, the same values as the Vercel NEXT_PUBLIC_GROUNDKIT_SUPABASE_* variables):
+# Required repository secrets (Settings > Secrets and variables > Actions > Secrets; the same
+# values as the Vercel NEXT_PUBLIC_GROUNDKIT_SUPABASE_* variables):
 #   GROUNDKIT_SUPABASE_URL              e.g. https://<project-ref>.supabase.co
 #   GROUNDKIT_SUPABASE_PUBLISHABLE_KEY
 on:
@@ -22,13 +22,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      SUPABASE_URL: ${{ vars.GROUNDKIT_SUPABASE_URL }}
-      SUPABASE_KEY: ${{ vars.GROUNDKIT_SUPABASE_PUBLISHABLE_KEY }}
+      SUPABASE_URL: ${{ secrets.GROUNDKIT_SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.GROUNDKIT_SUPABASE_PUBLISHABLE_KEY }}
     steps:
       - name: Read from the database
         run: |
           if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_KEY" ]; then
-            echo "::error::Set the GROUNDKIT_SUPABASE_URL and GROUNDKIT_SUPABASE_PUBLISHABLE_KEY repository variables."
+            echo "::error::Set the GROUNDKIT_SUPABASE_URL and GROUNDKIT_SUPABASE_PUBLISHABLE_KEY repository secrets."
             exit 1
           fi
           status=$(curl -sS -o response.json -w '%{http_code}' \
