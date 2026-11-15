@@ -399,6 +399,10 @@ type Live = { icao24: string; callsign: string | null; lat: number; lon: number;
   is_freighter?: boolean | null;
   // The carrier, from the callsign's ICAO designator (api/index.py `airline_name`).
   airline_name?: string | null;
+  // From adsb.lol's aircraft database by transponder address; null where unknown.
+  registration?: string | null;
+  type_code?: string | null;
+  squawk?: string | null;
   // The API's direction for this fix (api/index.py `direction`), from the same history.
   dir?: "inbound" | "outbound" | "ground" | "other" | null };
 
@@ -578,6 +582,7 @@ type Placed = Live & {
   rag: Rag;
   event_at: Date | null;     // estimated arrival (inbound) or take-off (outbound)
   sched: Sched | null;       // the airport's scheduled flight, where it publishes a schedule
+  callsign_remembered: boolean; // the feed dropped the callsign; it is the last one seen
 };
 
 type Dir = "inbound" | "outbound";
@@ -684,6 +689,8 @@ function FlightPanel({ a, iata, tz, onClose }: { a: Placed; iata: string; tz: st
           <div style={{ fontSize: 14, fontWeight: 600 }}>{a.label}</div>
           {a.airline_name && <div>{a.airline_name}</div>}
           {a.callsign && a.callsign !== a.label && <div style={{ color: MUTED }}>{a.callsign}</div>}
+          {!a.callsign && <div style={{ color: MUTED }}>No callsign broadcast</div>}
+          {a.callsign_remembered && <div style={{ color: MUTED }}>Callsign last seen; not in this update</div>}
         </div>
         <button onClick={onClose} aria-label="Hide flight"
           style={{ marginLeft: "auto", border: "none", background: "none", cursor: "pointer", color: MUTED, fontSize: 14, lineHeight: 1 }}>
@@ -699,6 +706,8 @@ function FlightPanel({ a, iata, tz, onClose }: { a: Placed; iata: string; tz: st
         {tracked && <span style={{ color: MUTED }}>· {ragText(a)}</span>}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 10px" }}>
+        {a.registration && row("Registration", a.registration)}
+        {a.type_code && row("Type", a.type_code)}
         {row("Distance", `${Math.round(a.dist_nm)} NM`)}
         {row("Altitude", a.on_ground ? "Ground" : `${a.alt_ft.toLocaleString()} ft`)}
         {row("Speed", a.speed_kt == null ? "–" : `${a.speed_kt} kt`)}
@@ -708,6 +717,8 @@ function FlightPanel({ a, iata, tz, onClose }: { a: Placed; iata: string; tz: st
         {a.event_at && !a.on_ground && (a.dir === "inbound"
           ? row("ETA", `${hm(a.event_at)} (${Math.round(a.eta_min ?? 0)} min)`)
           : row("Took off", `~${hm(a.event_at)}`))}
+        {a.squawk && row("Squawk", a.squawk)}
+        {row("Transponder", a.icao24.toUpperCase())}
       </div>
     </div>
   );
@@ -1726,6 +1737,8 @@ export default function AirportConditions() {
   // An arrival stays inbound until it lands, though downwind legs and holds point it away
   // from the airport, and a departure stays outbound.
   const lastDir = useRef(new Map<string, "inbound" | "outbound">());
+  // The last callsign and carrier seen per aircraft, for fixes where the feed drops them.
+  const lastIdent = useRef(new Map<string, { callsign: string; airline_name: string | null }>());
   const placed = useMemo((): Placed[] => {
     if (!wx) return [];
     const aLat = N(wx.lat), aLon = N(wx.lon);
@@ -1733,7 +1746,13 @@ export default function AirportConditions() {
     // Median minutes inside 50 NM at this airport over 30 days; fallbacks until data builds up.
     const terminalArrMin = kpi?.median_terminal != null ? N(kpi.median_terminal) : 15;
     const terminalDepMin = depKpi?.median_minutes != null ? N(depKpi.median_minutes) : 10;
-    return live.aircraft.map((a) => {
+    return live.aircraft.map((fix) => {
+      const identKey = `${icao}|${fix.icao24}`;
+      const known = lastIdent.current.get(identKey);
+      const callsign_remembered = !fix.callsign && known !== undefined;
+      const a = callsign_remembered
+        ? { ...fix, callsign: known.callsign, airline_name: fix.airline_name ?? known.airline_name } : fix;
+      if (fix.callsign) lastIdent.current.set(identKey, { callsign: fix.callsign, airline_name: fix.airline_name ?? null });
       const km = distKm(a.lat, a.lon, aLat, aLon);
       const h = a.callsign ? history.get(a.callsign) : undefined;
       // Angle between the aircraft's track and the bearing to the airport: 0 = heading
@@ -1797,7 +1816,7 @@ export default function AirportConditions() {
         : sched?.actual_at ? (sched.actual_at.getTime() - sched.scheduled_at.getTime()) / 60_000
         : seen && at ? wrapMinutes(minuteOfDay(at, tz) - seen.usual) : null;
       return {
-        ...a, dir, sched,
+        ...a, dir, sched, callsign_remembered,
         other: sched?.other ?? seen?.other ?? null,
         flight_iata: flightIata(a.callsign),
         label: flightIata(a.callsign) ?? a.callsign ?? a.icao24,

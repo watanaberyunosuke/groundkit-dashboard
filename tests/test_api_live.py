@@ -88,6 +88,15 @@ def test_merge_prefers_opensky_and_fills_in_from_adsb_lol():
     assert [a["callsign"] for a in merged] == ["CPA710", "EVA851"]
 
 
+def test_merge_fills_missing_fields_from_the_later_feed():
+    opensky = [{**plane("781e0a"), "callsign": None, "registration": None, "type_code": None}]
+    adsb = [{**plane("781E0A", nm_south=101), "callsign": "CSN3407", "registration": "B-32AN", "type_code": "A21N"}]
+    [a] = api.merge_live([opensky, adsb], *HKG)
+    # OpenSky's position stays; the identity comes from adsb.lol.
+    assert a["lat"] == opensky[0]["lat"]
+    assert (a["callsign"], a["registration"], a["type_code"]) == ("CSN3407", "B-32AN", "A21N")
+
+
 def test_merge_keeps_one_feed_when_the_other_failed():
     assert len(api.merge_live([None, [plane("89901c")]], *HKG)) == 1
 

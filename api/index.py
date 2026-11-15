@@ -337,6 +337,10 @@ def _from_opensky(lat: float, lon: float) -> list[dict]:
         "speed_kt": None if s[9] is None else round(s[9] * 1.94384),
         "track_deg": s[10],
         "vrate_fpm": None if s[11] is None else round(s[11] * 196.85),
+        # OpenSky has no aircraft database in its states; adsb.lol fills these in merge_live.
+        "registration": None,
+        "type_code": None,
+        "squawk": s[14] if len(s) > 14 else None,
     } for s in payload.get("states") or [] if s[5] is not None and s[6] is not None]
 
 
@@ -354,6 +358,11 @@ def _from_adsb_lol(lat: float, lon: float) -> list[dict]:
         "speed_kt": None if a.get("gs") is None else round(a["gs"]),
         "track_deg": a.get("track", a.get("true_heading")),
         "vrate_fpm": a.get("baro_rate", a.get("geom_rate")),
+        # From adsb.lol's aircraft database, by transponder address: present whether or not
+        # the aircraft broadcasts a callsign.
+        "registration": (a.get("r") or "").strip() or None,
+        "type_code": (a.get("t") or "").strip() or None,
+        "squawk": a.get("squawk"),
     } for a in payload.get("ac") or [] if a.get("lat") is not None and a.get("lon") is not None]
 
 
@@ -500,20 +509,26 @@ LIVE_SOURCES = (("OpenSky", _from_opensky), ("adsb.lol", _from_adsb_lol))
 
 
 def merge_live(feeds: list[list[dict] | None], lat: float, lon: float) -> list[dict]:
-    """Aircraft within LIVE_RADIUS_NM, each once: from the first feed that has it. OpenSky's
-    box reaches past the radius at its corners, so everything is cut to the circle."""
-    seen, out = set(), []
+    """Aircraft within LIVE_RADIUS_NM, each once: position from the first feed that has it,
+    with fields it lacks (callsign, registration, type, squawk) filled from later feeds.
+    OpenSky's box reaches past the radius at its corners, so everything is cut to the circle."""
+    seen: dict[str, dict] = {}
     for feed in feeds:
         for a in feed or []:
             # adsb.lol marks non-ICAO addresses with "~"; kept, so they never match one.
             key = (a["icao24"] or "").lower()
-            if not key or key in seen:
+            if not key:
+                continue
+            if key in seen:
+                first = seen[key]
+                for field, value in a.items():
+                    if first.get(field) is None and value is not None:
+                        first[field] = value
                 continue
             if _dist_km(a["lat"], a["lon"], lat, lon) > LIVE_RADIUS_NM * KM_PER_NM:
                 continue
-            seen.add(key)
-            out.append(a)
-    return out
+            seen[key] = a
+    return list(seen.values())
 
 
 @app.get("/api/live/{icao}")
