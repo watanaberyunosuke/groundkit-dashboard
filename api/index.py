@@ -513,22 +513,21 @@ def merge_live(feeds: list[list[dict] | None], lat: float, lon: float) -> list[d
     with fields it lacks (callsign, registration, type, squawk) filled from later feeds.
     OpenSky's box reaches past the radius at its corners, so everything is cut to the circle."""
     seen: dict[str, dict] = {}
-    for feed in feeds:
-        for a in feed or []:
-            # adsb.lol marks non-ICAO addresses with "~"; kept, so they never match one.
-            key = (a["icao24"] or "").lower()
-            if not key:
-                continue
-            if key in seen:
-                first = seen[key]
-                for field, value in a.items():
-                    if first.get(field) is None and value is not None:
-                        first[field] = value
-                continue
-            if _dist_km(a["lat"], a["lon"], lat, lon) > LIVE_RADIUS_NM * KM_PER_NM:
-                continue
+    for a in (a for feed in feeds for a in feed or []):
+        # adsb.lol marks non-ICAO addresses with "~"; kept, so they never match one.
+        key = (a["icao24"] or "").lower()
+        if key in seen:
+            _fill_missing(seen[key], a)
+        elif key and _dist_km(a["lat"], a["lon"], lat, lon) <= LIVE_RADIUS_NM * KM_PER_NM:
             seen[key] = a
     return list(seen.values())
+
+
+def _fill_missing(first: dict, later: dict) -> None:
+    """Fields the first feed left empty, from a later feed's copy of the same aircraft."""
+    for field, value in later.items():
+        if first.get(field) is None:
+            first[field] = value
 
 
 @app.get("/api/live/{icao}")

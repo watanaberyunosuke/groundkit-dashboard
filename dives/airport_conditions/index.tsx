@@ -590,6 +590,19 @@ type Dir = "inbound" | "outbound";
 // local time (minutes after midnight) and days seen out of the last 14.
 type History = Map<string, Partial<Record<Dir, { other: string | null; usual: number; days: number; freighter: boolean }>>>;
 
+// The fix with its callsign and carrier filled from earlier fixes when the feed dropped
+// them (and whether it was), remembering them when present.
+type Ident = { callsign: string; airline_name: string | null };
+function identify(memory: Map<string, Ident>, key: string, fix: Live): [Live, boolean] {
+  if (fix.callsign) {
+    memory.set(key, { callsign: fix.callsign, airline_name: fix.airline_name ?? null });
+    return [fix, false];
+  }
+  const known = memory.get(key);
+  if (!known) return [fix, false];
+  return [{ ...fix, callsign: known.callsign, airline_name: fix.airline_name ?? known.airline_name }, true];
+}
+
 // Delay status. OpenSky has no schedules, so "late" means later than the flight's usual
 // time at this airport over the last 30 days. Bands follow the 15-minute on-time convention.
 type Rag = "green" | "amber" | "red" | "unknown";
@@ -1738,7 +1751,7 @@ export default function AirportConditions() {
   // from the airport, and a departure stays outbound.
   const lastDir = useRef(new Map<string, "inbound" | "outbound">());
   // The last callsign and carrier seen per aircraft, for fixes where the feed drops them.
-  const lastIdent = useRef(new Map<string, { callsign: string; airline_name: string | null }>());
+  const lastIdent = useRef(new Map<string, Ident>());
   const placed = useMemo((): Placed[] => {
     if (!wx) return [];
     const aLat = N(wx.lat), aLon = N(wx.lon);
@@ -1747,12 +1760,7 @@ export default function AirportConditions() {
     const terminalArrMin = kpi?.median_terminal != null ? N(kpi.median_terminal) : 15;
     const terminalDepMin = depKpi?.median_minutes != null ? N(depKpi.median_minutes) : 10;
     return live.aircraft.map((fix) => {
-      const identKey = `${icao}|${fix.icao24}`;
-      const known = lastIdent.current.get(identKey);
-      const callsign_remembered = !fix.callsign && known !== undefined;
-      const a = callsign_remembered
-        ? { ...fix, callsign: known.callsign, airline_name: fix.airline_name ?? known.airline_name } : fix;
-      if (fix.callsign) lastIdent.current.set(identKey, { callsign: fix.callsign, airline_name: fix.airline_name ?? null });
+      const [a, callsign_remembered] = identify(lastIdent.current, `${icao}|${fix.icao24}`, fix);
       const km = distKm(a.lat, a.lon, aLat, aLon);
       const h = a.callsign ? history.get(a.callsign) : undefined;
       // Angle between the aircraft's track and the bearing to the airport: 0 = heading
