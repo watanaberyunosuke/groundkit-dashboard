@@ -86,3 +86,11 @@ def test_merge_cuts_to_the_radius_and_keeps_non_icao_addresses_apart():
     tisb = plane("~780a1b")
     merged = api.merge_live([[plane("780a1b"), far], [tisb]], *HKG)
     assert [a["icao24"] for a in merged] == ["780a1b", "~780a1b"]
+
+
+def test_adsb_lol_asked_within_its_250_nm_limit(monkeypatch):
+    # adsb.lol answers 403 "radius exceeds 250 NM" to anything wider.
+    urls = []
+    monkeypatch.setattr(api, "_get_json", lambda url, headers, timeout: urls.append(url) or {"ac": []})
+    api._from_adsb_lol(*HKG)
+    assert urls[0].endswith("/dist/250")
