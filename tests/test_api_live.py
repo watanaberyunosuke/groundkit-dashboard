@@ -66,6 +66,17 @@ def test_freighters_by_cargo_operator_designator():
     assert not api.is_freighter(None, ops)
 
 
+def test_airline_name_by_designator():
+    airlines = {"QTR": "Qatar Airways", "QLK": "QantasLink"}
+    assert api.airline_name("QTR8082", airlines) == "Qatar Airways"
+    assert api.airline_name("QLK10D", airlines) == "QantasLink"
+    # Unlisted designators, registrations, bare designators and blanks have none.
+    assert api.airline_name("ZZZ123", airlines) is None
+    assert api.airline_name("QTRABC", airlines) is None
+    assert api.airline_name("QTR", airlines) is None
+    assert api.airline_name(None, airlines) is None
+
+
 def plane(icao24, nm_south=100, callsign="CPA710"):
     return {**aircraft(nm_south, 0, callsign=callsign), "icao24": icao24}
 

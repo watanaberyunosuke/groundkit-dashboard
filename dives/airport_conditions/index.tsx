@@ -397,6 +397,8 @@ function mercator(lat: number, lon: number, z: number): [number, number] {
 type Live = { icao24: string; callsign: string | null; lat: number; lon: number; alt_ft: number;
   on_ground: boolean; speed_kt: number | null; track_deg: number | null; vrate_fpm: number | null;
   is_freighter?: boolean | null;
+  // The carrier, from the callsign's ICAO designator (api/index.py `airline_name`).
+  airline_name?: string | null;
   // The API's direction for this fix (api/index.py `direction`), from the same history.
   dir?: "inbound" | "outbound" | "ground" | "other" | null };
 
@@ -680,6 +682,7 @@ function FlightPanel({ a, iata, tz, onClose }: { a: Placed; iata: string; tz: st
       <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>{a.label}</div>
+          {a.airline_name && <div>{a.airline_name}</div>}
           {a.callsign && a.callsign !== a.label && <div style={{ color: MUTED }}>{a.callsign}</div>}
         </div>
         <button onClick={onClose} aria-label="Hide flight"

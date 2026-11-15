@@ -420,6 +420,32 @@ def is_freighter(callsign: str | None, operators: frozenset[str]) -> bool:
     return bool(m) and m.group(1) in operators
 
 
+# Airline names by ICAO designator (reference.airlines), cached like the cargo operators, so
+# every client names the carrier of any aircraft on the map, not only this airport's flights.
+_airline_names: tuple[float, dict[str, str]] | None = None
+_FLIGHT_DESIGNATOR = re.compile(r"([A-Z]{3})\d")
+
+
+def _airlines() -> dict[str, str]:
+    global _airline_names
+    if _airline_names and time.time() - _airline_names[0] < DIRECTION_TTL_S:
+        return _airline_names[1]
+    cur = get_connection().cursor()
+    try:
+        names = dict(cur.execute("select icao, name from reference.airlines where name is not null").fetchall())
+    finally:
+        cur.close()
+    _airline_names = (time.time(), names)
+    return names
+
+
+def airline_name(callsign: str | None, airlines: dict[str, str]) -> str | None:
+    """The carrier for a designator-and-number callsign (QTR8082, QLK10D); registrations and
+    unlisted designators have none."""
+    m = _FLIGHT_DESIGNATOR.match(callsign or "")
+    return airlines.get(m.group(1)) if m else None
+
+
 def _dist_km(la1: float, lo1: float, la2: float, lo2: float) -> float:
     r = math.pi / 180
     h = (math.sin((la2 - la1) * r / 2) ** 2
@@ -532,9 +558,15 @@ def live(icao: str) -> JSONResponse:
     except duckdb.Error as exc:  # likewise without freighter tags
         print(f"live {icao}: no cargo operators: {exc}")
         ops = None
+    try:
+        airlines = _airlines()
+    except duckdb.Error as exc:  # and without carrier names
+        print(f"live {icao}: no airline names: {exc}")
+        airlines = {}
     for a in aircraft:
         a["dir"] = None if dirs is None else direction(a, lat, lon, dirs)
         a["is_freighter"] = None if ops is None else is_freighter(a["callsign"], ops)
+        a["airline_name"] = airline_name(a["callsign"], airlines)
     source = " + ".join(name for name, _ in LIVE_SOURCES if name in fetched)
     return JSONResponse({"time": int(time.time()), "source": source, "aircraft": aircraft,
                          "failed": failures}, headers=LIVE_HEADERS)
