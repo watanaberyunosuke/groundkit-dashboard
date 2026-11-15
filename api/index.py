@@ -311,6 +311,9 @@ def _live_error(status: int, detail: str) -> JSONResponse:
 
 
 ADSB_LOL = "https://api.adsb.lol/v2/lat/{lat}/lon/{lon}/dist/{nm}"  # ODbL, no key
+# adsb.lol answers 403 "radius exceeds 250 NM" above this, so it covers the inner half of
+# LIVE_RADIUS_NM; OpenSky's box, when it answers, covers the rest.
+ADSB_LOL_MAX_NM = 250
 
 
 def _get_json(url: str, headers: dict, timeout: float):
@@ -338,7 +341,8 @@ def _from_opensky(lat: float, lon: float) -> list[dict]:
 
 
 def _from_adsb_lol(lat: float, lon: float) -> list[dict]:
-    payload = _get_json(ADSB_LOL.format(lat=lat, lon=lon, nm=LIVE_RADIUS_NM), {}, timeout=8)
+    payload = _get_json(ADSB_LOL.format(lat=lat, lon=lon, nm=min(LIVE_RADIUS_NM, ADSB_LOL_MAX_NM)),
+                        {}, timeout=8)
     # readsb JSON: altitudes in ft ("ground" when on the ground), speeds in kt.
     return [{
         "icao24": a.get("hex"),
