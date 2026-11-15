@@ -337,6 +337,10 @@ def _from_opensky(lat: float, lon: float) -> list[dict]:
         "speed_kt": None if s[9] is None else round(s[9] * 1.94384),
         "track_deg": s[10],
         "vrate_fpm": None if s[11] is None else round(s[11] * 196.85),
+        # OpenSky has no aircraft database in its states; adsb.lol fills these in merge_live.
+        "registration": None,
+        "type_code": None,
+        "squawk": s[14] if len(s) > 14 else None,
     } for s in payload.get("states") or [] if s[5] is not None and s[6] is not None]
 
 
@@ -354,6 +358,11 @@ def _from_adsb_lol(lat: float, lon: float) -> list[dict]:
         "speed_kt": None if a.get("gs") is None else round(a["gs"]),
         "track_deg": a.get("track", a.get("true_heading")),
         "vrate_fpm": a.get("baro_rate", a.get("geom_rate")),
+        # From adsb.lol's aircraft database, by transponder address: present whether or not
+        # the aircraft broadcasts a callsign.
+        "registration": (a.get("r") or "").strip() or None,
+        "type_code": (a.get("t") or "").strip() or None,
+        "squawk": a.get("squawk"),
     } for a in payload.get("ac") or [] if a.get("lat") is not None and a.get("lon") is not None]
 
 
@@ -420,6 +429,32 @@ def is_freighter(callsign: str | None, operators: frozenset[str]) -> bool:
     return bool(m) and m.group(1) in operators
 
 
+# Airline names by ICAO designator (reference.airlines), cached like the cargo operators, so
+# every client names the carrier of any aircraft on the map, not only this airport's flights.
+_airline_names: tuple[float, dict[str, str]] | None = None
+_FLIGHT_DESIGNATOR = re.compile(r"([A-Z]{3})\d")
+
+
+def _airlines() -> dict[str, str]:
+    global _airline_names
+    if _airline_names and time.time() - _airline_names[0] < DIRECTION_TTL_S:
+        return _airline_names[1]
+    cur = get_connection().cursor()
+    try:
+        names = dict(cur.execute("select icao, name from reference.airlines where name is not null").fetchall())
+    finally:
+        cur.close()
+    _airline_names = (time.time(), names)
+    return names
+
+
+def airline_name(callsign: str | None, airlines: dict[str, str]) -> str | None:
+    """The carrier for a designator-and-number callsign (QTR8082, QLK10D); registrations and
+    unlisted designators have none."""
+    m = _FLIGHT_DESIGNATOR.match(callsign or "")
+    return airlines.get(m.group(1)) if m else None
+
+
 def _dist_km(la1: float, lo1: float, la2: float, lo2: float) -> float:
     r = math.pi / 180
     h = (math.sin((la2 - la1) * r / 2) ** 2
@@ -474,20 +509,25 @@ LIVE_SOURCES = (("OpenSky", _from_opensky), ("adsb.lol", _from_adsb_lol))
 
 
 def merge_live(feeds: list[list[dict] | None], lat: float, lon: float) -> list[dict]:
-    """Aircraft within LIVE_RADIUS_NM, each once: from the first feed that has it. OpenSky's
-    box reaches past the radius at its corners, so everything is cut to the circle."""
-    seen, out = set(), []
-    for feed in feeds:
-        for a in feed or []:
-            # adsb.lol marks non-ICAO addresses with "~"; kept, so they never match one.
-            key = (a["icao24"] or "").lower()
-            if not key or key in seen:
-                continue
-            if _dist_km(a["lat"], a["lon"], lat, lon) > LIVE_RADIUS_NM * KM_PER_NM:
-                continue
-            seen.add(key)
-            out.append(a)
-    return out
+    """Aircraft within LIVE_RADIUS_NM, each once: position from the first feed that has it,
+    with fields it lacks (callsign, registration, type, squawk) filled from later feeds.
+    OpenSky's box reaches past the radius at its corners, so everything is cut to the circle."""
+    seen: dict[str, dict] = {}
+    for a in (a for feed in feeds for a in feed or []):
+        # adsb.lol marks non-ICAO addresses with "~"; kept, so they never match one.
+        key = (a["icao24"] or "").lower()
+        if key in seen:
+            _fill_missing(seen[key], a)
+        elif key and _dist_km(a["lat"], a["lon"], lat, lon) <= LIVE_RADIUS_NM * KM_PER_NM:
+            seen[key] = a
+    return list(seen.values())
+
+
+def _fill_missing(first: dict, later: dict) -> None:
+    """Fields the first feed left empty, from a later feed's copy of the same aircraft."""
+    for field, value in later.items():
+        if first.get(field) is None:
+            first[field] = value
 
 
 @app.get("/api/live/{icao}")
@@ -532,9 +572,15 @@ def live(icao: str) -> JSONResponse:
     except duckdb.Error as exc:  # likewise without freighter tags
         print(f"live {icao}: no cargo operators: {exc}")
         ops = None
+    try:
+        airlines = _airlines()
+    except duckdb.Error as exc:  # and without carrier names
+        print(f"live {icao}: no airline names: {exc}")
+        airlines = {}
     for a in aircraft:
         a["dir"] = None if dirs is None else direction(a, lat, lon, dirs)
         a["is_freighter"] = None if ops is None else is_freighter(a["callsign"], ops)
+        a["airline_name"] = airline_name(a["callsign"], airlines)
     source = " + ".join(name for name, _ in LIVE_SOURCES if name in fetched)
     return JSONResponse({"time": int(time.time()), "source": source, "aircraft": aircraft,
                          "failed": failures}, headers=LIVE_HEADERS)

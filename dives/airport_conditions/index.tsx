@@ -397,6 +397,12 @@ function mercator(lat: number, lon: number, z: number): [number, number] {
 type Live = { icao24: string; callsign: string | null; lat: number; lon: number; alt_ft: number;
   on_ground: boolean; speed_kt: number | null; track_deg: number | null; vrate_fpm: number | null;
   is_freighter?: boolean | null;
+  // The carrier, from the callsign's ICAO designator (api/index.py `airline_name`).
+  airline_name?: string | null;
+  // From adsb.lol's aircraft database by transponder address; null where unknown.
+  registration?: string | null;
+  type_code?: string | null;
+  squawk?: string | null;
   // The API's direction for this fix (api/index.py `direction`), from the same history.
   dir?: "inbound" | "outbound" | "ground" | "other" | null };
 
@@ -576,12 +582,26 @@ type Placed = Live & {
   rag: Rag;
   event_at: Date | null;     // estimated arrival (inbound) or take-off (outbound)
   sched: Sched | null;       // the airport's scheduled flight, where it publishes a schedule
+  callsign_remembered: boolean; // the feed dropped the callsign; it is the last one seen
 };
 
 type Dir = "inbound" | "outbound";
 // Per callsign and direction over the last 30 days: usual origin / destination, usual
 // local time (minutes after midnight) and days seen out of the last 14.
 type History = Map<string, Partial<Record<Dir, { other: string | null; usual: number; days: number; freighter: boolean }>>>;
+
+// The fix with its callsign and carrier filled from earlier fixes when the feed dropped
+// them (and whether it was), remembering them when present.
+type Ident = { callsign: string; airline_name: string | null };
+function identify(memory: Map<string, Ident>, key: string, fix: Live): [Live, boolean] {
+  if (fix.callsign) {
+    memory.set(key, { callsign: fix.callsign, airline_name: fix.airline_name ?? null });
+    return [fix, false];
+  }
+  const known = memory.get(key);
+  if (!known) return [fix, false];
+  return [{ ...fix, callsign: known.callsign, airline_name: fix.airline_name ?? known.airline_name }, true];
+}
 
 // Delay status. OpenSky has no schedules, so "late" means later than the flight's usual
 // time at this airport over the last 30 days. Bands follow the 15-minute on-time convention.
@@ -680,7 +700,10 @@ function FlightPanel({ a, iata, tz, onClose }: { a: Placed; iata: string; tz: st
       <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>{a.label}</div>
+          {a.airline_name && <div>{a.airline_name}</div>}
           {a.callsign && a.callsign !== a.label && <div style={{ color: MUTED }}>{a.callsign}</div>}
+          {!a.callsign && <div style={{ color: MUTED }}>No callsign broadcast</div>}
+          {a.callsign_remembered && <div style={{ color: MUTED }}>Callsign last seen; not in this update</div>}
         </div>
         <button onClick={onClose} aria-label="Hide flight"
           style={{ marginLeft: "auto", border: "none", background: "none", cursor: "pointer", color: MUTED, fontSize: 14, lineHeight: 1 }}>
@@ -696,6 +719,8 @@ function FlightPanel({ a, iata, tz, onClose }: { a: Placed; iata: string; tz: st
         {tracked && <span style={{ color: MUTED }}>· {ragText(a)}</span>}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "2px 10px" }}>
+        {a.registration && row("Registration", a.registration)}
+        {a.type_code && row("Type", a.type_code)}
         {row("Distance", `${Math.round(a.dist_nm)} NM`)}
         {row("Altitude", a.on_ground ? "Ground" : `${a.alt_ft.toLocaleString()} ft`)}
         {row("Speed", a.speed_kt == null ? "–" : `${a.speed_kt} kt`)}
@@ -705,6 +730,8 @@ function FlightPanel({ a, iata, tz, onClose }: { a: Placed; iata: string; tz: st
         {a.event_at && !a.on_ground && (a.dir === "inbound"
           ? row("ETA", `${hm(a.event_at)} (${Math.round(a.eta_min ?? 0)} min)`)
           : row("Took off", `~${hm(a.event_at)}`))}
+        {a.squawk && row("Squawk", a.squawk)}
+        {row("Transponder", a.icao24.toUpperCase())}
       </div>
     </div>
   );
@@ -1723,6 +1750,8 @@ export default function AirportConditions() {
   // An arrival stays inbound until it lands, though downwind legs and holds point it away
   // from the airport, and a departure stays outbound.
   const lastDir = useRef(new Map<string, "inbound" | "outbound">());
+  // The last callsign and carrier seen per aircraft, for fixes where the feed drops them.
+  const lastIdent = useRef(new Map<string, Ident>());
   const placed = useMemo((): Placed[] => {
     if (!wx) return [];
     const aLat = N(wx.lat), aLon = N(wx.lon);
@@ -1730,7 +1759,8 @@ export default function AirportConditions() {
     // Median minutes inside 50 NM at this airport over 30 days; fallbacks until data builds up.
     const terminalArrMin = kpi?.median_terminal != null ? N(kpi.median_terminal) : 15;
     const terminalDepMin = depKpi?.median_minutes != null ? N(depKpi.median_minutes) : 10;
-    return live.aircraft.map((a) => {
+    return live.aircraft.map((fix) => {
+      const [a, callsign_remembered] = identify(lastIdent.current, `${icao}|${fix.icao24}`, fix);
       const km = distKm(a.lat, a.lon, aLat, aLon);
       const h = a.callsign ? history.get(a.callsign) : undefined;
       // Angle between the aircraft's track and the bearing to the airport: 0 = heading
@@ -1794,7 +1824,7 @@ export default function AirportConditions() {
         : sched?.actual_at ? (sched.actual_at.getTime() - sched.scheduled_at.getTime()) / 60_000
         : seen && at ? wrapMinutes(minuteOfDay(at, tz) - seen.usual) : null;
       return {
-        ...a, dir, sched,
+        ...a, dir, sched, callsign_remembered,
         other: sched?.other ?? seen?.other ?? null,
         flight_iata: flightIata(a.callsign),
         label: flightIata(a.callsign) ?? a.callsign ?? a.icao24,
